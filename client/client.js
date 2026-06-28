@@ -5,6 +5,20 @@
 // Ele só: (1) manda input pro servidor, e (2) desenha o que o servidor manda
 // de volta. Toda a "verdade" do jogo mora no server.js.
 
+// --- GUARDA DE ENTRADA: exige nome vindo do menu.html ---
+// Lê o nome enviado pelo menu via parâmetro de URL (?name=...). Se alguém
+// abrir index.html direto, sem passar pelo menu, manda de volta pro menu
+// antes de conectar no servidor ou tocar no canvas.
+const urlParams = new URLSearchParams(window.location.search);
+const nameFromUrl = urlParams.get('name');
+
+if (!nameFromUrl || nameFromUrl.trim().length === 0) {
+    window.location.href = 'menu.html';
+    throw new Error('Nome ausente — redirecionando para o menu.');
+}
+
+const myName = nameFromUrl.trim().slice(0, 16);
+
 // ==========================================
 // 1. CONFIGURAÇÕES INICIAIS E CANVAS
 // ==========================================
@@ -22,7 +36,7 @@ let serverState = {
     foods: [],
     viruses: [],
     leaderboard: [],
-    world: { width: 10000, height: 10000 }
+    world: { width: 3000, height: 3000 }
 };
 
 // v35: snapshot anterior, usado pra interpolar (Lerp) entre updates de rede
@@ -30,13 +44,13 @@ let previousState = null;
 let lastStateReceivedAt = Date.now();
 
 let myId = null;
-let myName = 'Você';
 let connectionStatus = 'connecting'; // 'connecting' | 'connected' | 'disconnected'
 let isDead = false;
 let deathReason = '';
 
 // --- SISTEMA DE CÂMERA ---
 const camera = { x: 0, y: 0 };
+
 
 // --- CONTROLE DO MOUSE ---
 const mouse = {
