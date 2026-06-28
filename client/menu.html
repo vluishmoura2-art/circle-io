@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ball.io</title>
+    <link rel="stylesheet" href="menu.css">
+</head>
+<body>
+    <div class="menu-container">
+        <h1 class="logo">
+            ball<span class="logo-accent">.io</span>
+        </h1>
+        <p class="tagline">cresça, divida, sobreviva.</p>
+
+        <form id="playForm" class="play-form" autocomplete="off">
+            <input
+                type="text"
+                id="nameInput"
+                class="name-input"
+                placeholder="Seu nome"
+                maxlength="16"
+                required
+            >
+            <button type="submit" class="play-button">Jogar</button>
+        </form>
+
+        <p class="error-message" id="errorMessage"></p>
+
+        <div class="instructions">
+            <h2>Como jogar</h2>
+            <ul>
+                <li><span class="key">Mouse</span> move sua bolinha</li>
+                <li><span class="key">Espaço</span> divide sua bolinha</li>
+                <li>Coma comidas e jogadores menores pra crescer</li>
+                <li>Cuidado com os vírus verdes — eles estouram bolinhas grandes</li>
+                <li>Divida antes que o tempo acabe, ou você explode!</li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="menu.js"></script>
+</body>
+</html>

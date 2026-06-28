@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ball.io</title>
+    <!-- Se você já tem um arquivo CSS próprio na pasta client/, descomente
+         a linha abaixo e ajuste o nome do arquivo: -->
+    <!-- <link rel="stylesheet" href="style.css"> -->
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #101014;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- O Express já serve esse script automaticamente via require('socket.io') -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+</html>
