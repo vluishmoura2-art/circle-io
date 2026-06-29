@@ -55,8 +55,8 @@ app.use(express.static(path.join(__dirname, '..', 'client')));
 // 1. CONFIGURAÇÕES DO MUNDO (mesma escala do cliente original)
 // ==========================================
 const world = {
-    width: 3000,
-    height: 3000
+    width: 6000,
+    height: 6000
 };
 
 const TICK_RATE = 1000 / 30; // 30 atualizações de física por segundo
@@ -68,8 +68,11 @@ const players = {};
 const foods = [];
 const viruses = [];
 
-const MAX_FOODS = 800;
-const MAX_VIRUSES = 25;
+// Mapa 6000x6000 tem 4x a área do original (3000x3000), já que dobrar
+// largura E altura multiplica a área por 4 (2x * 2x). Escalamos comida e
+// vírus na mesma proporção pra manter a mesma densidade visual de antes.
+const MAX_FOODS = 3200;   // 800 * 4
+const MAX_VIRUSES = 100;  // 25 * 4
 const foodColors = ['#ff3366', '#ff9933', '#ffff33', '#33ccff', '#9933ff'];
 
 function spawnFood() {

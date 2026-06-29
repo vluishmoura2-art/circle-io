@@ -31,12 +31,15 @@ const ctx = canvas.getContext('2d');
 const socket = io(); // por padrão conecta no mesmo host/porta que serviu a página
 
 // --- ESTADO RECEBIDO DO SERVIDOR (preenchido pelo evento 'state') ---
+// world aqui é só um valor inicial padrão, usado por uma fração de segundo
+// antes do primeiro pacote 'state' chegar — depois disso, o valor real
+// enviado pelo servidor (linha ~241, serverState.world) sempre prevalece.
 let serverState = {
     players: {},
     foods: [],
     viruses: [],
     leaderboard: [],
-    world: { width: 3000, height: 3000 }
+    world: { width: 6000, height: 6000 }
 };
 
 // v35: snapshot anterior, usado pra interpolar (Lerp) entre updates de rede
