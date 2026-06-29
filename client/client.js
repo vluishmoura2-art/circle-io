@@ -374,11 +374,8 @@ function drawUI(me) {
     ctx.fillText(`ball.io | Tamanho: ${score} | Pedaços: ${cellCount}`, canvas.width / 2, 40);
 
     if (me && !isDead) {
-        // O servidor já manda splitTimer pronto; só precisamos saber o limite
-        // da faixa atual pra calcular quanto tempo falta — replicando a mesma
-        // tabela do v26 aqui no cliente, só para exibição (o servidor é quem
-        // de fato decide a morte).
-        const deadlineSeconds = getClientSideDeadlineSeconds(score);
+        const immunityCount = me.abilityCounts ? me.abilityCounts.immunity : 0;
+        const deadlineSeconds = getClientSideDeadlineSeconds(score, immunityCount);
         const secondsElapsed = me.splitTimer / 30; // 30 ticks/s no servidor
         const secondsLeft = Math.max(0, Math.ceil(deadlineSeconds - secondsElapsed));
 
@@ -386,25 +383,65 @@ function drawUI(me) {
         ctx.fillStyle = isUrgent ? '#ff3333' : '#ffcc00';
         ctx.font = isUrgent ? 'bold 18px Arial' : '16px Arial';
         ctx.fillText(`Divida em: ${secondsLeft}s`, canvas.width / 2, 65);
+
+        // Sistema de Level/XP: barra de progresso + nível atual
+        drawLevelBar(me);
     }
 }
 
+function drawLevelBar(me) {
+    const barWidth = 200;
+    const barHeight = 10;
+    const barX = canvas.width / 2 - barWidth / 2;
+    const barY = 85;
+
+    const xpProgress = me.xpNeeded > 0 ? Math.min(1, me.xp / me.xpNeeded) : 1;
+
+    // Fundo da barra
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+
+    // Progresso
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(barX, barY, barWidth * xpProgress, barHeight);
+
+    // Borda
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+    // Texto do nível
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '13px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Nível ${me.level}`, canvas.width / 2, barY + barHeight + 16);
+}
+
+// Mesma tabela usada no servidor (ver server.js), só para exibição.
+// O servidor é sempre quem decide a morte de fato; isso aqui é só pra
+// mostrar o número certo na tela.
 const SPLIT_DEADLINE_TABLE_CLIENT = [
-    { minScore: 5000, seconds: 20 },
-    { minScore: 1000, seconds: 50 },
-    { minScore: 500, seconds: 100 },
-    { minScore: 200, seconds: 200 },
-    { minScore: 100, seconds: 500 },
-    { minScore: 0, seconds: 1000 }
+    { minScore: 5000, seconds: 5 },
+    { minScore: 1000, seconds: 10 },
+    { minScore: 500, seconds: 20 },
+    { minScore: 200, seconds: 30 },
+    { minScore: 100, seconds: 40 },
+    { minScore: 0, seconds: 50 }
 ];
 
-function getClientSideDeadlineSeconds(score) {
+function getClientSideDeadlineSeconds(score, immunityCount) {
+    let baseSeconds = SPLIT_DEADLINE_TABLE_CLIENT[SPLIT_DEADLINE_TABLE_CLIENT.length - 1].seconds;
+
     for (let i = 0; i < SPLIT_DEADLINE_TABLE_CLIENT.length; i++) {
         if (score >= SPLIT_DEADLINE_TABLE_CLIENT[i].minScore) {
-            return SPLIT_DEADLINE_TABLE_CLIENT[i].seconds;
+            baseSeconds = SPLIT_DEADLINE_TABLE_CLIENT[i].seconds;
+            break;
         }
     }
-    return SPLIT_DEADLINE_TABLE_CLIENT[SPLIT_DEADLINE_TABLE_CLIENT.length - 1].seconds;
+
+    // Habilidade "Imunidade ao contador": +20% de tempo por escolha.
+    const immunityMultiplier = 1 + ((immunityCount || 0) * 0.20);
+    return baseSeconds * immunityMultiplier;
 }
 
 // v38: leaderboard agora vem pronto do servidor (dados reais dos jogadores conectados)
@@ -472,287 +509,71 @@ function drawGameOver() {
 }
 
 // ==========================================
-// 7. LOOP PRINCIPAL (só renderiza — física é toda do servidor)
+// 7. SISTEMA DE LEVEL/XP — PAINEL DE ESCOLHA DE HABILIDADE
+// ==========================================
+// O painel HTML (#abilityPanel, definido no index.html) fica oculto até o
+// jogador ter pelo menos 1 level-up pendente. O jogo continua rodando ao
+// fundo enquanto o painel está visível — não há pausa, conforme o design.
+const abilityPanel = document.getElementById('abilityPanel');
+const countSpeedEl = document.getElementById('countSpeed');
+const countConsumptionEl = document.getElementById('countConsumption');
+const countImmunityEl = document.getElementById('countImmunity');
+
+let abilityPanelVisible = false;
+
+function updateAbilityPanel(me) {
+    if (!me || isDead) {
+        hideAbilityPanel();
+        return;
+    }
+
+    const hasPending = (me.pendingLevelUps || 0) > 0;
+
+    if (hasPending && !abilityPanelVisible) {
+        showAbilityPanel();
+    } else if (!hasPending && abilityPanelVisible) {
+        hideAbilityPanel();
+    }
+
+    if (hasPending && me.abilityCounts) {
+        // Mostra quantas vezes cada habilidade já foi escolhida, pra o
+        // jogador acompanhar seu build ao longo da partida.
+        countSpeedEl.textContent = `${me.abilityCounts.speed}x escolhida`;
+        countConsumptionEl.textContent = `${me.abilityCounts.consumption}x escolhida`;
+        countImmunityEl.textContent = `${me.abilityCounts.immunity}x escolhida`;
+    }
+}
+
+function showAbilityPanel() {
+    abilityPanel.classList.add('visible');
+    abilityPanelVisible = true;
+}
+
+function hideAbilityPanel() {
+    abilityPanel.classList.remove('visible');
+    abilityPanelVisible = false;
+}
+
+// Clique em qualquer um dos 3 botões envia a escolha pro servidor. O
+// servidor decide se há de fato um level-up pendente antes de aplicar —
+// o cliente nunca aplica o bônus por conta própria.
+abilityPanel.querySelectorAll('.ability-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const ability = btn.getAttribute('data-ability');
+        socket.emit('choose_ability', { ability: ability });
+    });
+});
+
+// ==========================================
+// 8. LOOP PRINCIPAL (só renderiza — física é toda do servidor)
 // ==========================================
 function gameLoop() {
     drawGame();
+
+    const me = myId ? serverState.players[myId] : null;
+    updateAbilityPanel(me);
+
     requestAnimationFrame(gameLoop);
 }
 
 gameLoop();
-// ==========================================
-// APÊNDICE: EFETUADOR DE WARP E MASSA NAS BORDAS (POST-RENDER)
-// Colado inteiramente no final do arquivo.
-// ==========================================
-(function injectEdgeWarp() {
-    // Criamos um gancho visual injetando o efeito logo após o drawGame rodar no loop
-    const originalGameLoop = window.gameLoop;
-    
-    // Se o loop principal estiver no escopo global, envelopamos ele
-    if (typeof gameLoop === 'function') {
-        const nativeLoop = gameLoop;
-        window.gameLoop = function() {
-            nativeLoop();
-            renderEdgeWarp();
-        };
-    } else {
-        // Alternativa: Se não exposto globalmente, rodamos em paralelo sincronizado com a animação
-        function parallelLoop() {
-            renderEdgeWarp();
-            requestAnimationFrame(parallelLoop);
-        }
-        requestAnimationFrame(parallelLoop);
-    }
-
-    function renderEdgeWarp() {
-        // Verifica se o estado do jogo e o player existem
-        if (!serverState || !serverState.players || !myId) return;
-        const me = serverState.players[myId];
-        if (!me || me.isDead) return;
-
-        // Recupera as células atuais já calculadas (ou interpoladas)
-        // Como myCells está no escopo do drawGame, recalculamos a interpolação aqui de forma idêntica
-        const prevMe = previousState ? previousState.players[myId] : null;
-        const t = getInterpolationFactor();
-        const myCells = getInterpolatedCells(me, prevMe, t);
-        
-        if (!myCells || myCells.length === 0) return;
-
-        ctx.save();
-        // Move o contexto para o espaço da câmera do mundo, igual ao drawGame original
-        ctx.translate(-camera.x, -camera.y);
-
-        for (let i = 0; i < myCells.length; i++) {
-            const cell = myCells[i];
-            
-            const numberOfPoints = 60; // Pontos na borda para suavizar a gelatina
-            const distortionFactor = Math.max(0.05, cell.radius * 0.0006); 
-            const maxDistortion = cell.radius * distortionFactor;
-            
-            // Força do Warp baseada na distância do mouse (velocidade/direção intencional)
-            const inputX = mouse.x - canvas.width / 2;
-            const inputY = mouse.y - canvas.height / 2;
-            const speed = Math.sqrt(inputX * inputX + inputY * inputY) || 1;
-            const speedFactor = Math.min(1.8, speed / 400);
-
-            const time = Date.now() * 0.006;
-
-            ctx.beginPath();
-            
-            for (let p = 0; p < numberOfPoints; p++) {
-                const angle = (p / numberOfPoints) * Math.PI * 2;
-                
-                // Ondas matemáticas senoidais cruzadas criam a ilusão de massa fluida/líquida
-                const wave1 = Math.sin(angle * 8 + time);
-                const wave2 = Math.cos(angle * 4 - time * 1.5);
-                const noise = (wave1 + wave2) * 0.5;
-                
-                // Modifica o raio do ponto na borda
-                const radiusWarp = noise * maxDistortion * (0.4 + speedFactor);
-                const warpedRadius = cell.radius + radiusWarp;
-
-                const px = cell.x + Math.cos(angle) * warpedRadius;
-                const py = cell.y + Math.sin(angle) * warpedRadius;
-
-                if (p === 0) {
-                    ctx.moveTo(px, py);
-                } else {
-                    ctx.lineTo(px, py);
-                }
-            }
-            
-            ctx.closePath();
-
-            // Gradiente radial focado apenas na extremidade da borda
-            const edgeGradient = ctx.createRadialGradient(
-                cell.x, cell.y, cell.radius * 0.85,
-                cell.x, cell.y, cell.radius + maxDistortion
-            );
-            
-            const baseColor = cell.mergeTimer > 0 ? 'rgba(51, 255, 240, ' : 'rgba(0, 255, 204, ';
-            
-            edgeGradient.addColorStop(0, baseColor + '0)');       // Começa invisível dentro da célula
-            edgeGradient.addColorStop(0.4, baseColor + '0.55)');  // Fica nítido exatamente na borda real
-            edgeGradient.addColorStop(1, baseColor + '0)');       // Desvanece no limite do warp externo
-
-            ctx.fillStyle = edgeGradient;
-            ctx.fill();
-            
-            // Linha sutil de contorno deformada para dar mais presença física ao efeito
-            ctx.strokeStyle = cell.mergeTimer > 0 ? 'rgba(51, 255, 240, 0.3)' : 'rgba(0, 122, 102, 0.4)';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        }
-
-        ctx.restore();
-    }
-})();
-// ==========================================
-// APÊNDICE: INJEÇÃO DA COR ESCOLHIDA NA REDE
-// ==========================================
-(function injectPlayerColor() {
-    // 1. Lê a cor da URL (?color=...). Se não existir, usa o azul padrão original do jogo
-    const urlParamsColor = new URLSearchParams(window.location.search);
-    const chosenColor = urlParamsColor.get('color') || '#00ffcc';
-
-    // 2. Intercepta a função original do socket.emit para injetar a cor nos eventos certos
-    const originalEmit = socket.emit;
-    
-    socket.emit = function(eventName, data) {
-        // Quando o cliente pedir para entrar ('join') ou renascer ('respawn'), injetamos a cor junto
-        if (eventName === 'join' || eventName === 'respawn') {
-            data = data || {};
-            data.color = chosenColor; // Envia a cor customizada para o servidor
-        }
-        // Executa o envio real do Socket.io
-        return originalEmit.apply(this, [eventName, data]);
-    };
-
-    // 3. Altera a cor de renderização local do "Eu mesmo" (dentro do drawGame)
-    // Para que você veja seu próprio círculo com a cor escolhida, e não fixo em #00ffcc
-    // Procuramos o evento 'state' para ajustar a cor do nosso player localmente assim que o servidor mandar
-    socket.on('state', (state) => {
-        if (myId && state.players[myId]) {
-            state.players[myId].color = chosenColor;
-        }
-    });
-})();
-// ==========================================
-// APÊNDICE INTERCEPTOR V2: WARP ADAPTATIVO POR PESO/MASSA
-// Colado inteiramente no final do arquivo client.js.
-// ==========================================
-(function injectWeightedPlayerWarp() {
-    const urlParamsColor = new URLSearchParams(window.location.search);
-    const chosenColor = urlParamsColor.get('color') || '#00ffcc';
-
-    function hexToRgb(hex, alpha = 1) {
-        let c = hex.substring(1);
-        if(c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
-        let r = parseInt(c.substring(0, 2), 16);
-        let g = parseInt(c.substring(2, 4), 16);
-        let b = parseInt(c.substring(4, 6), 16);
-        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    }
-
-    socket.on('state', (state) => {
-        if (myId && state.players[myId]) {
-            state.players[myId].color = chosenColor;
-        }
-    });
-
-    if (typeof gameLoop === 'function') {
-        const nativeLoop = gameLoop;
-        window.gameLoop = function() {
-            nativeLoop();
-            renderWeightedWarp();
-        };
-    } else {
-        function parallelLoop() {
-            renderWeightedWarp();
-            requestAnimationFrame(parallelLoop);
-        }
-        requestAnimationFrame(parallelLoop);
-    }
-
-    function renderWeightedWarp() {
-        if (!serverState || !serverState.players || !myId) return;
-        const me = serverState.players[myId];
-        if (!me || me.isDead) return;
-
-        const prevMe = previousState ? previousState.players[myId] : null;
-        const t = getInterpolationFactor();
-        const myCells = getInterpolatedCells(me, prevMe, t);
-        
-        if (!myCells || myCells.length === 0) return;
-
-        ctx.save();
-        ctx.translate(-camera.x, -camera.y);
-
-        for (let i = 0; i < myCells.length; i++) {
-            const cell = myCells[i];
-            
-            // --- CÁLCULO DE DINÂMICA DE PESO (MASSA) ---
-            // 1. Mais pontos para círculos maiores (evita que a borda fique "quadrada" ao crescer)
-            const numberOfPoints = Math.floor(Math.min(120, 50 + (cell.radius * 0.3))); 
-            
-            // 2. Ondas mais lentas para círculos maiores (Simula inércia e peso de fluido denso)
-            // Célula pequena (raio 20) = multiplicador ~0.005. Célula gigante (raio 500) = multiplicador ~0.001
-            const massSlownessFactor = Math.max(0.001, 0.006 - (cell.radius * 0.00001));
-            const time = Date.now() * massSlownessFactor;
-
-            // 3. Proporção da distorção diminui sutilmente conforme cresce para não descontrolar
-            const distortionFactor = Math.max(0.02, 0.06 - (cell.radius * 0.00005));
-            const maxDistortion = cell.radius * distortionFactor;
-            
-            const inputX = mouse.x - canvas.width / 2;
-            const inputY = mouse.y - canvas.height / 2;
-            const speed = Math.sqrt(inputX * inputX + inputY * inputY) || 1;
-            // Círculos maiores também reagem menos bruscamente ao movimento do mouse
-            const speedFactor = Math.min(1.3, (speed / 600) * (100 / (100 + cell.radius)));
-
-            // Limpa o círculo perfeito original do client.js
-            ctx.globalCompositeOperation = 'destination-out';
-            ctx.beginPath();
-            ctx.arc(cell.x, cell.y, cell.radius + 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.closePath();
-            
-            ctx.globalCompositeOperation = 'source-over';
-
-            // Desenha o polígono pesado/maleável
-            ctx.beginPath();
-            for (let p = 0; p < numberOfPoints; p++) {
-                const angle = (p / numberOfPoints) * Math.PI * 2;
-                
-                // Diminuímos a frequência das ondas em células grandes para ondulações mais largas
-                const waveFreq = cell.radius > 150 ? 6 : 10;
-                const wave1 = Math.sin(angle * waveFreq + time);
-                const wave2 = Math.cos(angle * (waveFreq / 2) - time * 1.2);
-                const noise = (wave1 + wave2) * 0.5;
-                
-                const radiusWarp = noise * maxDistortion * (0.4 + speedFactor);
-                const warpedRadius = cell.radius + radiusWarp;
-
-                const px = cell.x + Math.cos(angle) * warpedRadius;
-                const py = cell.y + Math.sin(angle) * warpedRadius;
-
-                if (p === 0) {
-                    ctx.moveTo(px, py);
-                } else {
-                    ctx.lineTo(px, py);
-                }
-            }
-            ctx.closePath();
-
-            // Preenchimento da Massa
-            const fillGradient = ctx.createRadialGradient(
-                cell.x, cell.y, 0,
-                cell.x, cell.y, cell.radius + maxDistortion
-            );
-            fillGradient.addColorStop(0, '#ffffff');
-            fillGradient.addColorStop(0.2, chosenColor);
-            fillGradient.addColorStop(1, hexToRgb(chosenColor, 0.7));
-
-            ctx.fillStyle = fillGradient;
-            ctx.fill();
-
-            // Membrana Externa Gelatinosa
-            const edgeGradient = ctx.createRadialGradient(
-                cell.x, cell.y, cell.radius * 0.82,
-                cell.x, cell.y, cell.radius + maxDistortion
-            );
-            const edgeColor = cell.mergeTimer > 0 ? '#33fff0' : chosenColor;
-            edgeGradient.addColorStop(0, hexToRgb(edgeColor, 0));
-            edgeGradient.addColorStop(0.5, hexToRgb(edgeColor, 0.6));
-            edgeGradient.addColorStop(1, hexToRgb(edgeColor, 0));
-
-            ctx.fillStyle = edgeGradient;
-            ctx.fill();
-
-            ctx.strokeStyle = cell.mergeTimer > 0 ? '#33fff0' : hexToRgb(chosenColor, 0.8);
-            ctx.lineWidth = Math.max(2, cell.radius * 0.02); // Borda engrossa proporcionalmente ao tamanho
-            ctx.stroke();
-        }
-        ctx.restore();
-    }
-})();

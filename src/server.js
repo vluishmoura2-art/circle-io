@@ -135,27 +135,101 @@ function createPlayer(socketId, name) {
         splitTimer: 0,
         mouseX: 0,
         mouseY: 0,
-        lastInputAt: Date.now()
+        lastInputAt: Date.now(),
+
+        // --- Sistema de Level/XP (novo) ---
+        level: 1,
+        xp: 0,
+        // Contagem de quantas vezes cada habilidade foi escolhida. Cada
+        // escolha empilha +20% de bônus, sem teto (confirmado pelo design).
+        abilityCounts: {
+            speed: 0,       // +20% de velocidade por escolha
+            consumption: 0, // +20% de ganho de massa ao comer, por escolha
+            immunity: 0     // +20% de tempo extra no contador de split, por escolha
+        },
+        // Quando o jogador sobe de nível, fica "pendente" até ele escolher
+        // uma das 3 opções pelo painel na tela. Pode acumular mais de um
+        // nível pendente se subir rápido (ex: comeu um jogador grande).
+        pendingLevelUps: 0
     };
 }
 
-const SPLIT_DEADLINE_TABLE = [
-    { minScore: 5000, seconds: 20 },
-    { minScore: 1000, seconds: 50 },
-    { minScore: 500, seconds: 100 },
-    { minScore: 200, seconds: 200 },
-    { minScore: 100, seconds: 500 },
-    { minScore: 0, seconds: 1000 }
-];
+// --- Sistema de Level/XP ---
+// XP ganho por segundo vivo. Curva calculada pra ~10 minutos de jogo
+// contínuo até o nível 100 (ver xpNeededForLevel). O servidor roda a
+// (1000 / TICK_RATE) ticks por segundo, então damos uma fração de XP a
+// cada tick que, somada ao longo de 1 segundo, dá exatamente 1.0 XP.
+const TICKS_PER_SECOND = 1000 / TICK_RATE;
+const XP_PER_TICK = 1 / TICKS_PER_SECOND;
+const XP_BASE = 1.0;
+const XP_GROWTH = 1.03;
+const MAX_LEVEL = 100;
 
-function getSplitDeadlineTicks(score) {
-    const ticksPerSecond = 1000 / TICK_RATE;
-    for (let i = 0; i < SPLIT_DEADLINE_TABLE.length; i++) {
-        if (score >= SPLIT_DEADLINE_TABLE[i].minScore) {
-            return SPLIT_DEADLINE_TABLE[i].seconds * ticksPerSecond;
+function xpNeededForLevel(level) {
+    // XP necessário para subir DO nível `level` PARA o `level + 1`.
+    return XP_BASE * Math.pow(XP_GROWTH, level - 1);
+}
+
+// Bônus acumulado de cada habilidade, em multiplicador (0.20 = +20%)
+const ABILITY_BONUS_PER_PICK = 0.20;
+
+function getSpeedMultiplier(player) {
+    return 1 + (player.abilityCounts.speed * ABILITY_BONUS_PER_PICK);
+}
+
+function getConsumptionMultiplier(player) {
+    return 1 + (player.abilityCounts.consumption * ABILITY_BONUS_PER_PICK);
+}
+
+function getImmunityMultiplier(player) {
+    return 1 + (player.abilityCounts.immunity * ABILITY_BONUS_PER_PICK);
+}
+
+function addXp(player, amount) {
+    if (player.isDead || player.level >= MAX_LEVEL) return;
+
+    player.xp += amount;
+
+    // Pode subir mais de um nível de uma vez se ganhar muito XP de uma vez
+    // (proteção de loop, embora hoje XP só venha de tempo vivo, 1 por tick)
+    while (player.level < MAX_LEVEL) {
+        const needed = xpNeededForLevel(player.level);
+        if (player.xp >= needed) {
+            player.xp -= needed;
+            player.level++;
+            player.pendingLevelUps++;
+        } else {
+            break;
         }
     }
-    return SPLIT_DEADLINE_TABLE[SPLIT_DEADLINE_TABLE.length - 1].seconds * ticksPerSecond;
+}
+
+// Tabela atualizada: tempos mais curtos/agressivos que a versão original,
+// já compensados pelo sistema de níveis (a habilidade de "imunidade ao
+// contador" pode estender esses limites conforme o jogador sobe de nível).
+const SPLIT_DEADLINE_TABLE = [
+    { minScore: 5000, seconds: 5 },
+    { minScore: 1000, seconds: 10 },
+    { minScore: 500, seconds: 20 },
+    { minScore: 200, seconds: 30 },
+    { minScore: 100, seconds: 40 },
+    { minScore: 0, seconds: 50 }
+];
+
+function getSplitDeadlineTicks(score, immunityMultiplier) {
+    const ticksPerSecond = 1000 / TICK_RATE;
+    let baseSeconds = SPLIT_DEADLINE_TABLE[SPLIT_DEADLINE_TABLE.length - 1].seconds;
+
+    for (let i = 0; i < SPLIT_DEADLINE_TABLE.length; i++) {
+        if (score >= SPLIT_DEADLINE_TABLE[i].minScore) {
+            baseSeconds = SPLIT_DEADLINE_TABLE[i].seconds;
+            break;
+        }
+    }
+
+    // Habilidade "Imunidade ao contador": +20% de TEMPO no limite, por
+    // escolha, acumulado sem teto (ex: 50s vira 60s, depois 70s...).
+    return baseSeconds * immunityMultiplier * ticksPerSecond;
 }
 
 function getPlayerMassRadius(player) {
@@ -270,6 +344,20 @@ io.on('connection', (socket) => {
         splitPlayer(player);
     });
 
+    // Sistema de Level/XP: o cliente manda qual das 3 habilidades o
+    // jogador escolheu no painel que aparece ao subir de nível.
+    socket.on('choose_ability', (data) => {
+        const player = players[socket.id];
+        if (!player || player.isDead) return;
+        if (player.pendingLevelUps <= 0) return; // não há nível pendente, ignora
+
+        const validAbilities = ['speed', 'consumption', 'immunity'];
+        if (!validAbilities.includes(data.ability)) return;
+
+        player.abilityCounts[data.ability]++;
+        player.pendingLevelUps--;
+    });
+
     socket.on('disconnect', () => {
         console.log(`[disconnect] ${socket.id} saiu`);
         delete players[socket.id];
@@ -286,9 +374,15 @@ function updatePhysics() {
         const player = players[playerIds[p]];
         if (player.isDead) continue;
 
+        // Sistema de Level/XP: ganha XP a cada tick que estiver vivo,
+        // equivalente a 1 XP por segundo de vida.
+        addXp(player, XP_PER_TICK);
+
         for (let i = 0; i < player.cells.length; i++) {
             const cell = player.cells[i];
-            const cellSpeed = Math.max(2.5, player.baseSpeed / Math.sqrt(cell.radius / 30)) * (TICK_RATE / (1000 / 60));
+            const baseCellSpeed = Math.max(2.5, player.baseSpeed / Math.sqrt(cell.radius / 30)) * (TICK_RATE / (1000 / 60));
+            // Habilidade "Velocidade": +20% por escolha, acumulado sem teto.
+            const cellSpeed = baseCellSpeed * getSpeedMultiplier(player);
 
             const dx = player.mouseX;
             const dy = player.mouseY;
@@ -373,7 +467,7 @@ function updatePhysics() {
 
         player.splitTimer++;
         const score = getPlayerMassRadius(player);
-        const deadlineTicks = getSplitDeadlineTicks(score);
+        const deadlineTicks = getSplitDeadlineTicks(score, getImmunityMultiplier(player));
         if (player.splitTimer >= deadlineTicks) {
             killPlayer(player, 'timer');
             continue;
@@ -395,7 +489,9 @@ function updatePhysics() {
 
                 if (dist < cell.radius) {
                     foods.splice(f, 1);
-                    cell.radius += 0.4;
+                    // Habilidade "Consumo de pontos": +20% de massa ganha
+                    // por comida comida, por escolha, acumulado sem teto.
+                    cell.radius += 0.4 * getConsumptionMultiplier(player);
                     foods.push(spawnFood());
                 }
             }
@@ -451,7 +547,9 @@ function updatePhysics() {
 
                     if (dist < cellA.radius + cellB.radius) {
                         if (cellA.radius > cellB.radius * 1.1) {
-                            cellA.radius += cellB.radius * 0.25;
+                            // Habilidade "Consumo de pontos" também se aplica
+                            // ao comer outros jogadores, não só comida.
+                            cellA.radius += cellB.radius * 0.25 * getConsumptionMultiplier(playerA);
                             playerB.cells.splice(cb, 1);
                             if (playerB.cells.length === 0) {
                                 killPlayer(playerB, 'eaten');
@@ -497,7 +595,14 @@ function broadcastState() {
             isDead: player.isDead,
             cells: player.cells,
             splitTimer: player.splitTimer,
-            score: getPlayerMassRadius(player)
+            score: getPlayerMassRadius(player),
+
+            // Sistema de Level/XP
+            level: player.level,
+            xp: player.xp,
+            xpNeeded: player.level < MAX_LEVEL ? xpNeededForLevel(player.level) : 0,
+            pendingLevelUps: player.pendingLevelUps,
+            abilityCounts: player.abilityCounts
         };
     }
 
@@ -536,64 +641,3 @@ httpServer.listen(PORT, () => {
     console.log(`[ball.io server] rodando na porta ${PORT}`);
     console.log(`[ball.io server] mundo: ${world.width}x${world.height} | comidas: ${MAX_FOODS} | vírus: ${MAX_VIRUSES}`);
 });
-// aviso total
-// ==========================================
-// APÊNDICE SERVIDOR: GERENCIADOR DE CORES DOS JOGADORES
-// ==========================================
-// Este bloco intercepta a criação de novos jogadores no servidor e atribui a cor enviada pelo menu.
-// Se o seu servidor usa uma estrutura padrão de io.on('connection'), este gancho garante a atribuição:
-
-if (typeof io !== 'undefined') {
-    io.on('connection', (socket) => {
-        // Ouve quando o jogador envia os dados de entrada
-        socket.on('join', (data) => {
-            // Procura o jogador na sua lista de players do servidor (ajuste se o nome do seu objeto for diferente)
-            if (typeof players !== 'undefined' && players[socket.id]) {
-                // Se o cliente mandou uma cor válida, usa ela. Senão, mantém a lógica do server.
-                if (data && data.color) {
-                    players[socket.id].color = data.color;
-                }
-            }
-        });
-
-        // Ouve também o respawn para manter a cor quando o jogador morrer e voltar
-        socket.on('respawn', (data) => {
-            if (typeof players !== 'undefined' && players[socket.id]) {
-                if (data && data.color) {
-                    players[socket.id].color = data.color;
-                }
-            }
-        });
-    });
-}
-// ==========================================
-// APÊNDICE SERVIDOR V2: INÉRCIA E DESACELERAÇÃO POR MASSA
-// Colado inteiramente no final do arquivo server.js.
-// ==========================================
-if (typeof io !== 'undefined') {
-    // Interceptamos o recebimento de inputs para aplicar um freio de massa (peso)
-    io.on('connection', (socket) => {
-        socket.on('input', (data) => {
-            if (typeof players !== 'undefined' && players[socket.id] && data) {
-                const player = players[socket.id];
-                if (player.cells && player.cells.length > 0) {
-                    
-                    // Calcula o raio total / tamanho aproximado do player
-                    let totalRadius = 0;
-                    for (let i = 0; i < player.cells.length; i++) {
-                        totalRadius += player.cells[i].radius;
-                    }
-                    
-                    // Multiplicador de lentidão: quanto maior o totalRadius, menor o valor de velocidade.
-                    // Exemplo: Um player com 30 de raio se move normal (multiplicador próximo de 1).
-                    // Um player gigante com 400 de raio vai cortar a força do input pela metade ou mais.
-                    const speedDamping = Math.max(0.15, 150 / (150 + totalRadius));
-                    
-                    // Modifica o vetor de input enviado antes que o motor de física do server calcule o passo
-                    data.x *= speedDamping;
-                    data.y *= speedDamping;
-                }
-            }
-        });
-    });
-}

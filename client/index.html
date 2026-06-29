@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Circle.io</title>
+    <title>ball.io</title>
+    <!-- Esta página espera ser aberta como index.html?name=SeuNome, vindo
+         do menu.html. Se aberta sem esse parâmetro, o client.js redireciona
+         automaticamente de volta pro menu. -->
     <!-- Se você já tem um arquivo CSS próprio na pasta client/, descomente
          a linha abaixo e ajuste o nome do arquivo: -->
     <!-- <link rel="stylesheet" href="style.css"> -->
@@ -17,11 +20,82 @@
         canvas {
             display: block;
         }
+
+        /* Painel de escolha de habilidade (Sistema de Level/XP) */
+        #abilityPanel {
+            position: fixed;
+            bottom: 110px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: none; /* o client.js mostra/esconde via JS */
+            gap: 12px;
+            z-index: 10;
+        }
+
+        #abilityPanel.visible {
+            display: flex;
+        }
+
+        .ability-btn {
+            background: #1a1a20;
+            border: 2px solid #2a2a32;
+            border-radius: 10px;
+            padding: 12px 18px;
+            color: #ffffff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 13px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.15s ease, transform 0.1s ease;
+            min-width: 110px;
+        }
+
+        .ability-btn:hover {
+            border-color: #00ffcc;
+            transform: translateY(-2px);
+        }
+
+        .ability-btn:active {
+            transform: scale(0.96);
+        }
+
+        .ability-btn .ability-title {
+            font-weight: 700;
+            color: #00ffcc;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .ability-btn .ability-count {
+            display: block;
+            font-size: 11px;
+            color: #8a8a92;
+            margin-top: 4px;
+        }
     </style>
-    <link rel="shortcut icon" href="Custom-Icon-Design-Flatastic-6-Circle.512.png" type="image/x-icon">
 </head>
 <body>
     <canvas id="gameCanvas"></canvas>
+
+    <!-- Painel de escolha de habilidade ao subir de nível. Fica oculto até
+         o jogador ter um level-up pendente; o client.js controla isso. -->
+    <div id="abilityPanel">
+        <button class="ability-btn" data-ability="speed">
+            <span class="ability-title">⚡ Velocidade</span>
+            +20% de velocidade
+            <span class="ability-count" id="countSpeed"></span>
+        </button>
+        <button class="ability-btn" data-ability="consumption">
+            <span class="ability-title">🍽️ Consumo</span>
+            +20% massa ao comer
+            <span class="ability-count" id="countConsumption"></span>
+        </button>
+        <button class="ability-btn" data-ability="immunity">
+            <span class="ability-title">🛡️ Imunidade</span>
+            +20% tempo p/ dividir
+            <span class="ability-count" id="countImmunity"></span>
+        </button>
+    </div>
 
     <!-- O Express já serve esse script automaticamente via require('socket.io') -->
     <script src="/socket.io/socket.io.js"></script>
