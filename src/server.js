@@ -536,3 +536,33 @@ httpServer.listen(PORT, () => {
     console.log(`[ball.io server] rodando na porta ${PORT}`);
     console.log(`[ball.io server] mundo: ${world.width}x${world.height} | comidas: ${MAX_FOODS} | vírus: ${MAX_VIRUSES}`);
 });
+// aviso total
+// ==========================================
+// APÊNDICE SERVIDOR: GERENCIADOR DE CORES DOS JOGADORES
+// ==========================================
+// Este bloco intercepta a criação de novos jogadores no servidor e atribui a cor enviada pelo menu.
+// Se o seu servidor usa uma estrutura padrão de io.on('connection'), este gancho garante a atribuição:
+
+if (typeof io !== 'undefined') {
+    io.on('connection', (socket) => {
+        // Ouve quando o jogador envia os dados de entrada
+        socket.on('join', (data) => {
+            // Procura o jogador na sua lista de players do servidor (ajuste se o nome do seu objeto for diferente)
+            if (typeof players !== 'undefined' && players[socket.id]) {
+                // Se o cliente mandou uma cor válida, usa ela. Senão, mantém a lógica do server.
+                if (data && data.color) {
+                    players[socket.id].color = data.color;
+                }
+            }
+        });
+
+        // Ouve também o respawn para manter a cor quando o jogador morrer e voltar
+        socket.on('respawn', (data) => {
+            if (typeof players !== 'undefined' && players[socket.id]) {
+                if (data && data.color) {
+                    players[socket.id].color = data.color;
+                }
+            }
+        });
+    });
+}

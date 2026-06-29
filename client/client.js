@@ -587,3 +587,33 @@ gameLoop();
         ctx.restore();
     }
 })();
+// ==========================================
+// APÊNDICE: INJEÇÃO DA COR ESCOLHIDA NA REDE
+// ==========================================
+(function injectPlayerColor() {
+    // 1. Lê a cor da URL (?color=...). Se não existir, usa o azul padrão original do jogo
+    const urlParamsColor = new URLSearchParams(window.location.search);
+    const chosenColor = urlParamsColor.get('color') || '#00ffcc';
+
+    // 2. Intercepta a função original do socket.emit para injetar a cor nos eventos certos
+    const originalEmit = socket.emit;
+    
+    socket.emit = function(eventName, data) {
+        // Quando o cliente pedir para entrar ('join') ou renascer ('respawn'), injetamos a cor junto
+        if (eventName === 'join' || eventName === 'respawn') {
+            data = data || {};
+            data.color = chosenColor; // Envia a cor customizada para o servidor
+        }
+        // Executa o envio real do Socket.io
+        return originalEmit.apply(this, [eventName, data]);
+    };
+
+    // 3. Altera a cor de renderização local do "Eu mesmo" (dentro do drawGame)
+    // Para que você veja seu próprio círculo com a cor escolhida, e não fixo em #00ffcc
+    // Procuramos o evento 'state' para ajustar a cor do nosso player localmente assim que o servidor mandar
+    socket.on('state', (state) => {
+        if (myId && state.players[myId]) {
+            state.players[myId].color = chosenColor;
+        }
+    });
+})();
