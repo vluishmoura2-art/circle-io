@@ -37,3 +37,39 @@ function showError(message) {
     errorMessage.textContent = message;
     nameInput.focus();
 }
+// ===================================================
+// LÓGICA DO SELETOR DE CORES (INTEGRAÇÃO COM O CLIENT)
+// ===================================================
+document.addEventListener("DOMContentLoaded", () => {
+    const colorInput = document.getElementById("playerColor");
+    const colorHex = document.getElementById("colorHex");
+    
+    if (colorInput && colorHex) {
+        // Atualiza a exibição do texto Hex e a cor dele dinamicamente
+        colorInput.addEventListener("input", (e) => {
+            const selectedColor = e.target.value;
+            colorHex.innerText = selectedColor.toUpperCase();
+            colorHex.style.color = selectedColor;
+        });
+    }
+
+    // Intercepta o envio do formulário ou clique do botão para injetar a cor na URL
+    const menuForm = document.querySelector("form") || document.getElementById("menuForm");
+    
+    if (menuForm) {
+        menuForm.addEventListener("submit", (e) => {
+            // Se o formulário original muda a página via action nativa, 
+            // precisamos anexar o parâmetro de cor antes de ir para o index.html
+            e.preventDefault();
+            
+            const nameInput = document.querySelector('input[name="name"]') || document.getElementById("nameInput");
+            const name = nameInput ? nameInput.value.trim() : "";
+            const color = colorInput ? encodeURIComponent(colorInput.value) : "%2300ffcc";
+
+            if (name.length > 0) {
+                // Redireciona levando tanto o Nome quanto a Cor escolhida
+                window.location.href = `index.html?name=${encodeURIComponent(name)}&color=${color}`;
+            }
+        });
+    }
+});
