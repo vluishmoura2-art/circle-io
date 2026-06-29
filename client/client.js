@@ -480,3 +480,110 @@ function gameLoop() {
 }
 
 gameLoop();
+// ==========================================
+// APÊNDICE: EFETUADOR DE WARP E MASSA NAS BORDAS (POST-RENDER)
+// Colado inteiramente no final do arquivo.
+// ==========================================
+(function injectEdgeWarp() {
+    // Criamos um gancho visual injetando o efeito logo após o drawGame rodar no loop
+    const originalGameLoop = window.gameLoop;
+    
+    // Se o loop principal estiver no escopo global, envelopamos ele
+    if (typeof gameLoop === 'function') {
+        const nativeLoop = gameLoop;
+        window.gameLoop = function() {
+            nativeLoop();
+            renderEdgeWarp();
+        };
+    } else {
+        // Alternativa: Se não exposto globalmente, rodamos em paralelo sincronizado com a animação
+        function parallelLoop() {
+            renderEdgeWarp();
+            requestAnimationFrame(parallelLoop);
+        }
+        requestAnimationFrame(parallelLoop);
+    }
+
+    function renderEdgeWarp() {
+        // Verifica se o estado do jogo e o player existem
+        if (!serverState || !serverState.players || !myId) return;
+        const me = serverState.players[myId];
+        if (!me || me.isDead) return;
+
+        // Recupera as células atuais já calculadas (ou interpoladas)
+        // Como myCells está no escopo do drawGame, recalculamos a interpolação aqui de forma idêntica
+        const prevMe = previousState ? previousState.players[myId] : null;
+        const t = getInterpolationFactor();
+        const myCells = getInterpolatedCells(me, prevMe, t);
+        
+        if (!myCells || myCells.length === 0) return;
+
+        ctx.save();
+        // Move o contexto para o espaço da câmera do mundo, igual ao drawGame original
+        ctx.translate(-camera.x, -camera.y);
+
+        for (let i = 0; i < myCells.length; i++) {
+            const cell = myCells[i];
+            
+            const numberOfPoints = 60; // Pontos na borda para suavizar a gelatina
+            const distortionFactor = Math.max(0.05, cell.radius * 0.0006); 
+            const maxDistortion = cell.radius * distortionFactor;
+            
+            // Força do Warp baseada na distância do mouse (velocidade/direção intencional)
+            const inputX = mouse.x - canvas.width / 2;
+            const inputY = mouse.y - canvas.height / 2;
+            const speed = Math.sqrt(inputX * inputX + inputY * inputY) || 1;
+            const speedFactor = Math.min(1.8, speed / 400);
+
+            const time = Date.now() * 0.006;
+
+            ctx.beginPath();
+            
+            for (let p = 0; p < numberOfPoints; p++) {
+                const angle = (p / numberOfPoints) * Math.PI * 2;
+                
+                // Ondas matemáticas senoidais cruzadas criam a ilusão de massa fluida/líquida
+                const wave1 = Math.sin(angle * 8 + time);
+                const wave2 = Math.cos(angle * 4 - time * 1.5);
+                const noise = (wave1 + wave2) * 0.5;
+                
+                // Modifica o raio do ponto na borda
+                const radiusWarp = noise * maxDistortion * (0.4 + speedFactor);
+                const warpedRadius = cell.radius + radiusWarp;
+
+                const px = cell.x + Math.cos(angle) * warpedRadius;
+                const py = cell.y + Math.sin(angle) * warpedRadius;
+
+                if (p === 0) {
+                    ctx.moveTo(px, py);
+                } else {
+                    ctx.lineTo(px, py);
+                }
+            }
+            
+            ctx.closePath();
+
+            // Gradiente radial focado apenas na extremidade da borda
+            const edgeGradient = ctx.createRadialGradient(
+                cell.x, cell.y, cell.radius * 0.85,
+                cell.x, cell.y, cell.radius + maxDistortion
+            );
+            
+            const baseColor = cell.mergeTimer > 0 ? 'rgba(51, 255, 240, ' : 'rgba(0, 255, 204, ';
+            
+            edgeGradient.addColorStop(0, baseColor + '0)');       // Começa invisível dentro da célula
+            edgeGradient.addColorStop(0.4, baseColor + '0.55)');  // Fica nítido exatamente na borda real
+            edgeGradient.addColorStop(1, baseColor + '0)');       // Desvanece no limite do warp externo
+
+            ctx.fillStyle = edgeGradient;
+            ctx.fill();
+            
+            // Linha sutil de contorno deformada para dar mais presença física ao efeito
+            ctx.strokeStyle = cell.mergeTimer > 0 ? 'rgba(51, 255, 240, 0.3)' : 'rgba(0, 122, 102, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+})();
