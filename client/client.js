@@ -617,3 +617,147 @@ gameLoop();
         }
     });
 })();
+// ==========================================
+// APÊNDICE INTERCEPTOR: PREENCHIMENTO E BORDA DISTORCIDOS (WARP COMPLETO)
+// Colado inteiramente no final do arquivo client.js.
+// ==========================================
+(function injectFullPlayerWarp() {
+    // 1. Captura a cor selecionada na URL ou mantém a padrão se não achar
+    const urlParamsColor = new URLSearchParams(window.location.search);
+    const chosenColor = urlParamsColor.get('color') || '#00ffcc';
+
+    // Utilitário para converter HEX em RGBA facilmente para os efeitos translúcidos
+    function hexToRgb(hex, alpha = 1) {
+        let c = hex.substring(1);
+        if(c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+        let r = parseInt(c.substring(0, 2), 16);
+        let g = parseInt(c.substring(2, 4), 16);
+        let b = parseInt(c.substring(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    // Garante que o estado local do player use a cor escolhida
+    socket.on('state', (state) => {
+        if (myId && state.players[myId]) {
+            state.players[myId].color = chosenColor;
+        }
+    });
+
+    // Injeta o renderizador após o loop principal terminar o desenho padrão do canvas
+    if (typeof gameLoop === 'function') {
+        const nativeLoop = gameLoop;
+        window.gameLoop = function() {
+            nativeLoop();
+            renderWarpedFillAndEdge();
+        };
+    } else {
+        function parallelLoop() {
+            renderWarpedFillAndEdge();
+            requestAnimationFrame(parallelLoop);
+        }
+        requestAnimationFrame(parallelLoop);
+    }
+
+    function renderWarpedFillAndEdge() {
+        if (!serverState || !serverState.players || !myId) return;
+        const me = serverState.players[myId];
+        if (!me || me.isDead) return;
+
+        const prevMe = previousState ? previousState.players[myId] : null;
+        const t = getInterpolationFactor();
+        const myCells = getInterpolatedCells(me, prevMe, t);
+        
+        if (!myCells || myCells.length === 0) return;
+
+        ctx.save();
+        ctx.translate(-camera.x, -camera.y);
+
+        for (let i = 0; i < myCells.length; i++) {
+            const cell = myCells[i];
+            
+            // --- CONFIGURAÇÃO DO EFEITO ---
+            const numberOfPoints = 65; 
+            const distortionFactor = Math.max(0.04, cell.radius * 0.0005);
+            const maxDistortion = cell.radius * distortionFactor;
+            
+            const inputX = mouse.x - canvas.width / 2;
+            const inputY = mouse.y - canvas.height / 2;
+            const speed = Math.sqrt(inputX * inputX + inputY * inputY) || 1;
+            const speedFactor = Math.min(1.5, speed / 500);
+
+            const time = Date.now() * 0.005;
+
+            // 2. APAGAR O CÍRCULO PERFEITO ORIGINAL
+            // Desenha um círculo invisível ligeiramente maior por cima usando o modo 'destination-out'
+            // para limpar o desenho redondo padrão feito pelo client.js segundos atrás.
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.beginPath();
+            ctx.arc(cell.x, cell.y, cell.radius + 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.closePath();
+            
+            // Restaura o modo normal de desenho para injetar nossa massa distorcida
+            ctx.globalCompositeOperation = 'source-over';
+
+            // --- GERAÇÃO DO POLÍGONO DISTORCIDO (WARP) ---
+            ctx.beginPath();
+            
+            for (let p = 0; p < numberOfPoints; p++) {
+                const angle = (p / numberOfPoints) * Math.PI * 2;
+                
+                const wave1 = Math.sin(angle * 10 + time);
+                const wave2 = Math.cos(angle * 5 - time * 1.2);
+                const noise = (wave1 + wave2) * 0.5;
+                
+                const radiusWarp = noise * maxDistortion * (0.3 + speedFactor);
+                const warpedRadius = cell.radius + radiusWarp;
+
+                const px = cell.x + Math.cos(angle) * warpedRadius;
+                const py = cell.y + Math.sin(angle) * warpedRadius;
+
+                if (p === 0) {
+                    ctx.moveTo(px, py);
+                } else {
+                    ctx.lineTo(px, py);
+                }
+            }
+            
+            ctx.closePath();
+
+            // --- RENDERIZAÇÃO DO PREENCHIMENTO DA MASSA ---
+            // Usamos um gradiente para dar sensação de densidade dentro do polígono deformado
+            const fillGradient = ctx.createRadialGradient(
+                cell.x, cell.y, 0,
+                cell.x, cell.y, cell.radius + maxDistortion
+            );
+            
+            fillGradient.addColorStop(0, '#ffffff'); // Brilho no núcleo da massa
+            fillGradient.addColorStop(0.2, chosenColor); // Cor escolhida pelo usuário no menu
+            fillGradient.addColorStop(1, hexToRgb(chosenColor, 0.7)); // Borda sutilmente mais escura/líquida
+
+            ctx.fillStyle = fillGradient;
+            ctx.fill();
+
+            // --- RENDERIZAÇÃO DA MEMBRANA EXTERNA (BORDA GELATINOSA) ---
+            const edgeGradient = ctx.createRadialGradient(
+                cell.x, cell.y, cell.radius * 0.8,
+                cell.x, cell.y, cell.radius + maxDistortion
+            );
+            
+            const edgeColor = cell.mergeTimer > 0 ? '#33fff0' : chosenColor;
+            edgeGradient.addColorStop(0, hexToRgb(edgeColor, 0));
+            edgeGradient.addColorStop(0.5, hexToRgb(edgeColor, 0.6));
+            edgeGradient.addColorStop(1, hexToRgb(edgeColor, 0));
+
+            ctx.fillStyle = edgeGradient;
+            ctx.fill();
+
+            // Contorno firme acompanhando perfeitamente a distorção
+            ctx.strokeStyle = cell.mergeTimer > 0 ? '#33fff0' : hexToRgb(chosenColor, 0.8);
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+})();
