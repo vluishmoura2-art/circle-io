@@ -566,3 +566,34 @@ if (typeof io !== 'undefined') {
         });
     });
 }
+// ==========================================
+// APÊNDICE SERVIDOR V2: INÉRCIA E DESACELERAÇÃO POR MASSA
+// Colado inteiramente no final do arquivo server.js.
+// ==========================================
+if (typeof io !== 'undefined') {
+    // Interceptamos o recebimento de inputs para aplicar um freio de massa (peso)
+    io.on('connection', (socket) => {
+        socket.on('input', (data) => {
+            if (typeof players !== 'undefined' && players[socket.id] && data) {
+                const player = players[socket.id];
+                if (player.cells && player.cells.length > 0) {
+                    
+                    // Calcula o raio total / tamanho aproximado do player
+                    let totalRadius = 0;
+                    for (let i = 0; i < player.cells.length; i++) {
+                        totalRadius += player.cells[i].radius;
+                    }
+                    
+                    // Multiplicador de lentidão: quanto maior o totalRadius, menor o valor de velocidade.
+                    // Exemplo: Um player com 30 de raio se move normal (multiplicador próximo de 1).
+                    // Um player gigante com 400 de raio vai cortar a força do input pela metade ou mais.
+                    const speedDamping = Math.max(0.15, 150 / (150 + totalRadius));
+                    
+                    // Modifica o vetor de input enviado antes que o motor de física do server calcule o passo
+                    data.x *= speedDamping;
+                    data.y *= speedDamping;
+                }
+            }
+        });
+    });
+}

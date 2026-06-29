@@ -618,15 +618,13 @@ gameLoop();
     });
 })();
 // ==========================================
-// APÊNDICE INTERCEPTOR: PREENCHIMENTO E BORDA DISTORCIDOS (WARP COMPLETO)
+// APÊNDICE INTERCEPTOR V2: WARP ADAPTATIVO POR PESO/MASSA
 // Colado inteiramente no final do arquivo client.js.
 // ==========================================
-(function injectFullPlayerWarp() {
-    // 1. Captura a cor selecionada na URL ou mantém a padrão se não achar
+(function injectWeightedPlayerWarp() {
     const urlParamsColor = new URLSearchParams(window.location.search);
     const chosenColor = urlParamsColor.get('color') || '#00ffcc';
 
-    // Utilitário para converter HEX em RGBA facilmente para os efeitos translúcidos
     function hexToRgb(hex, alpha = 1) {
         let c = hex.substring(1);
         if(c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
@@ -636,29 +634,27 @@ gameLoop();
         return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
 
-    // Garante que o estado local do player use a cor escolhida
     socket.on('state', (state) => {
         if (myId && state.players[myId]) {
             state.players[myId].color = chosenColor;
         }
     });
 
-    // Injeta o renderizador após o loop principal terminar o desenho padrão do canvas
     if (typeof gameLoop === 'function') {
         const nativeLoop = gameLoop;
         window.gameLoop = function() {
             nativeLoop();
-            renderWarpedFillAndEdge();
+            renderWeightedWarp();
         };
     } else {
         function parallelLoop() {
-            renderWarpedFillAndEdge();
+            renderWeightedWarp();
             requestAnimationFrame(parallelLoop);
         }
         requestAnimationFrame(parallelLoop);
     }
 
-    function renderWarpedFillAndEdge() {
+    function renderWeightedWarp() {
         if (!serverState || !serverState.players || !myId) return;
         const me = serverState.players[myId];
         if (!me || me.isDead) return;
@@ -675,41 +671,46 @@ gameLoop();
         for (let i = 0; i < myCells.length; i++) {
             const cell = myCells[i];
             
-            // --- CONFIGURAÇÃO DO EFEITO ---
-            const numberOfPoints = 65; 
-            const distortionFactor = Math.max(0.04, cell.radius * 0.0005);
+            // --- CÁLCULO DE DINÂMICA DE PESO (MASSA) ---
+            // 1. Mais pontos para círculos maiores (evita que a borda fique "quadrada" ao crescer)
+            const numberOfPoints = Math.floor(Math.min(120, 50 + (cell.radius * 0.3))); 
+            
+            // 2. Ondas mais lentas para círculos maiores (Simula inércia e peso de fluido denso)
+            // Célula pequena (raio 20) = multiplicador ~0.005. Célula gigante (raio 500) = multiplicador ~0.001
+            const massSlownessFactor = Math.max(0.001, 0.006 - (cell.radius * 0.00001));
+            const time = Date.now() * massSlownessFactor;
+
+            // 3. Proporção da distorção diminui sutilmente conforme cresce para não descontrolar
+            const distortionFactor = Math.max(0.02, 0.06 - (cell.radius * 0.00005));
             const maxDistortion = cell.radius * distortionFactor;
             
             const inputX = mouse.x - canvas.width / 2;
             const inputY = mouse.y - canvas.height / 2;
             const speed = Math.sqrt(inputX * inputX + inputY * inputY) || 1;
-            const speedFactor = Math.min(1.5, speed / 500);
+            // Círculos maiores também reagem menos bruscamente ao movimento do mouse
+            const speedFactor = Math.min(1.3, (speed / 600) * (100 / (100 + cell.radius)));
 
-            const time = Date.now() * 0.005;
-
-            // 2. APAGAR O CÍRCULO PERFEITO ORIGINAL
-            // Desenha um círculo invisível ligeiramente maior por cima usando o modo 'destination-out'
-            // para limpar o desenho redondo padrão feito pelo client.js segundos atrás.
+            // Limpa o círculo perfeito original do client.js
             ctx.globalCompositeOperation = 'destination-out';
             ctx.beginPath();
             ctx.arc(cell.x, cell.y, cell.radius + 3, 0, Math.PI * 2);
             ctx.fill();
             ctx.closePath();
             
-            // Restaura o modo normal de desenho para injetar nossa massa distorcida
             ctx.globalCompositeOperation = 'source-over';
 
-            // --- GERAÇÃO DO POLÍGONO DISTORCIDO (WARP) ---
+            // Desenha o polígono pesado/maleável
             ctx.beginPath();
-            
             for (let p = 0; p < numberOfPoints; p++) {
                 const angle = (p / numberOfPoints) * Math.PI * 2;
                 
-                const wave1 = Math.sin(angle * 10 + time);
-                const wave2 = Math.cos(angle * 5 - time * 1.2);
+                // Diminuímos a frequência das ondas em células grandes para ondulações mais largas
+                const waveFreq = cell.radius > 150 ? 6 : 10;
+                const wave1 = Math.sin(angle * waveFreq + time);
+                const wave2 = Math.cos(angle * (waveFreq / 2) - time * 1.2);
                 const noise = (wave1 + wave2) * 0.5;
                 
-                const radiusWarp = noise * maxDistortion * (0.3 + speedFactor);
+                const radiusWarp = noise * maxDistortion * (0.4 + speedFactor);
                 const warpedRadius = cell.radius + radiusWarp;
 
                 const px = cell.x + Math.cos(angle) * warpedRadius;
@@ -721,29 +722,25 @@ gameLoop();
                     ctx.lineTo(px, py);
                 }
             }
-            
             ctx.closePath();
 
-            // --- RENDERIZAÇÃO DO PREENCHIMENTO DA MASSA ---
-            // Usamos um gradiente para dar sensação de densidade dentro do polígono deformado
+            // Preenchimento da Massa
             const fillGradient = ctx.createRadialGradient(
                 cell.x, cell.y, 0,
                 cell.x, cell.y, cell.radius + maxDistortion
             );
-            
-            fillGradient.addColorStop(0, '#ffffff'); // Brilho no núcleo da massa
-            fillGradient.addColorStop(0.2, chosenColor); // Cor escolhida pelo usuário no menu
-            fillGradient.addColorStop(1, hexToRgb(chosenColor, 0.7)); // Borda sutilmente mais escura/líquida
+            fillGradient.addColorStop(0, '#ffffff');
+            fillGradient.addColorStop(0.2, chosenColor);
+            fillGradient.addColorStop(1, hexToRgb(chosenColor, 0.7));
 
             ctx.fillStyle = fillGradient;
             ctx.fill();
 
-            // --- RENDERIZAÇÃO DA MEMBRANA EXTERNA (BORDA GELATINOSA) ---
+            // Membrana Externa Gelatinosa
             const edgeGradient = ctx.createRadialGradient(
-                cell.x, cell.y, cell.radius * 0.8,
+                cell.x, cell.y, cell.radius * 0.82,
                 cell.x, cell.y, cell.radius + maxDistortion
             );
-            
             const edgeColor = cell.mergeTimer > 0 ? '#33fff0' : chosenColor;
             edgeGradient.addColorStop(0, hexToRgb(edgeColor, 0));
             edgeGradient.addColorStop(0.5, hexToRgb(edgeColor, 0.6));
@@ -752,12 +749,10 @@ gameLoop();
             ctx.fillStyle = edgeGradient;
             ctx.fill();
 
-            // Contorno firme acompanhando perfeitamente a distorção
             ctx.strokeStyle = cell.mergeTimer > 0 ? '#33fff0' : hexToRgb(chosenColor, 0.8);
-            ctx.lineWidth = 3;
+            ctx.lineWidth = Math.max(2, cell.radius * 0.02); // Borda engrossa proporcionalmente ao tamanho
             ctx.stroke();
         }
-
         ctx.restore();
     }
 })();
