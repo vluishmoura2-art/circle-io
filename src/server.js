@@ -9,9 +9,15 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const auth = require('./auth');
+const db = require('./db');
+const skinsModule = require('./skins');
 
 const app = express();
 const httpServer = http.createServer(app);
+
+// Necessário pra ler JSON no corpo das requisições de login/registro/compra
+app.use(express.json());
 
 // --- CORS: liberado por enquanto pra facilitar o teste/beta. O front-end
 // (menu.html, index.html) é servido pelo PRÓPRIO Render junto com este
@@ -45,6 +51,96 @@ app.get('/health', (req, res) => {
         playersOnline: Object.keys(players).length,
         uptimeSeconds: Math.floor(process.uptime())
     });
+});
+
+// ==========================================
+// ROTAS DE AUTENTICAÇÃO (registro/login)
+// ==========================================
+app.post('/api/register', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const result = await auth.register(username, password);
+        if (!result.success) {
+            return res.status(400).json({ error: result.error });
+        }
+        res.json({ token: result.token, user: result.user });
+    } catch (err) {
+        console.error('[register] erro:', err);
+        res.status(500).json({ error: 'Erro interno ao registrar. Tente novamente.' });
+    }
+});
+
+app.post('/api/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const result = await auth.login(username, password);
+        if (!result.success) {
+            return res.status(401).json({ error: result.error });
+        }
+        res.json({ token: result.token, user: result.user });
+    } catch (err) {
+        console.error('[login] erro:', err);
+        res.status(500).json({ error: 'Erro interno ao fazer login. Tente novamente.' });
+    }
+});
+
+// Middleware simples pra validar o token JWT nas rotas que precisam de
+// usuário autenticado (perfil, loja).
+function requireAuth(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Token ausente.' });
+    }
+    const token = authHeader.slice('Bearer '.length);
+    const decoded = auth.verifyToken(token);
+    if (!decoded) {
+        return res.status(401).json({ error: 'Token inválido ou expirado.' });
+    }
+    req.userId = decoded.userId;
+    req.username = decoded.username;
+    next();
+}
+
+// Retorna dados do jogador logado: saldo de Circoins e skins possuídas.
+app.get('/api/me', requireAuth, async (req, res) => {
+    try {
+        const user = await db.findUserById(req.userId);
+        if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+        const ownedSkins = await db.getUserSkins(req.userId);
+        res.json({ user, ownedSkins, availableSkins: skinsModule.getAllSkins() });
+    } catch (err) {
+        console.error('[me] erro:', err);
+        res.status(500).json({ error: 'Erro ao buscar dados do usuário.' });
+    }
+});
+
+// ==========================================
+// ROTA DA LOJA (compra de skins)
+// ==========================================
+app.post('/api/shop/purchase', requireAuth, async (req, res) => {
+    try {
+        const { skinId } = req.body;
+        const skin = skinsModule.getSkin(skinId);
+        if (!skin) {
+            return res.status(400).json({ error: 'Skin inválida.' });
+        }
+
+        const result = await db.purchaseSkin(req.userId, skin.id, skin.price);
+
+        if (!result.success) {
+            const messages = {
+                insufficient_funds: 'Circoins insuficientes para essa skin.',
+                already_owned: 'Você já possui essa skin.'
+            };
+            return res.status(400).json({ error: messages[result.reason] || 'Não foi possível comprar.', circoins: result.circoins });
+        }
+
+        res.json({ success: true, circoins: result.circoins, skinId: skin.id });
+    } catch (err) {
+        console.error('[shop/purchase] erro:', err);
+        res.status(500).json({ error: 'Erro interno ao processar a compra.' });
+    }
 });
 
 // Serve os arquivos estáticos do front-end (index.html, client.js, css, menu.css...).
@@ -118,7 +214,7 @@ function createCell(x, y, radius, vx = 0, vy = 0) {
     return { x, y, radius, vx, vy, mergeTimer: 0 };
 }
 
-function createPlayer(socketId, name) {
+function createPlayer(socketId, name, userId, ownedSkins) {
     return {
         id: socketId,
         name: (name || 'Anônimo').slice(0, 16),
@@ -137,6 +233,14 @@ function createPlayer(socketId, name) {
         mouseY: 0,
         lastInputAt: Date.now(),
 
+        // --- Conta/Circoins/Skins ---
+        // userId é null para quem está jogando sem login (convidado) — esse
+        // jogador simplesmente não ganha Circoins persistentes nem tem
+        // acesso a skins pagas, mas pode jogar normalmente.
+        userId: userId || null,
+        ownedSkins: ownedSkins || [], // array de skin_id que o jogador possui
+        sessionStartedAt: Date.now(), // usado pra calcular Circoins ganhos ao morrer/desconectar
+
         // --- Sistema de Level/XP (novo) ---
         level: 1,
         xp: 0,
@@ -152,6 +256,30 @@ function createPlayer(socketId, name) {
         // nível pendente se subir rápido (ex: comeu um jogador grande).
         pendingLevelUps: 0
     };
+}
+
+// --- Sistema de Circoins ---
+// 1 Circoin por minuto vivo = (1/60) Circoin por segundo. Convertido pra
+// "por tick" do mesmo jeito que o XP, lá na seção de Level/XP abaixo.
+const CIRCOINS_PER_MINUTE = 1;
+
+// Credita no banco os Circoins ganhos durante a sessão que está terminando
+// (morte ou desconexão). Joga fora silenciosamente se o jogador não tiver
+// conta (userId null) ou se o banco não estiver configurado.
+async function creditSessionCircoins(player) {
+    if (!player.userId || !db.pool) return;
+
+    const sessionSeconds = (Date.now() - player.sessionStartedAt) / 1000;
+    const earned = Math.floor((sessionSeconds / 60) * CIRCOINS_PER_MINUTE);
+
+    if (earned <= 0) return;
+
+    try {
+        await db.addCircoins(player.userId, earned);
+        console.log(`[circoins] usuário ${player.userId} ganhou ${earned} Circoins (${sessionSeconds.toFixed(0)}s de sessão).`);
+    } catch (err) {
+        console.error('[circoins] erro ao creditar:', err);
+    }
 }
 
 // --- Sistema de Level/XP ---
@@ -183,6 +311,13 @@ function getConsumptionMultiplier(player) {
 
 function getImmunityMultiplier(player) {
     return 1 + (player.abilityCounts.immunity * ABILITY_BONUS_PER_PICK);
+}
+
+// Skin Elétrica: efeito de gameplay real (não só cosmético) — verifica se
+// o jogador possui a skin 'electric' entre as skins carregadas do banco
+// no momento do join/respawn (player.ownedSkins).
+function hasVirusImmunity(player) {
+    return player.ownedSkins && player.ownedSkins.includes('electric');
 }
 
 function addXp(player, amount) {
@@ -308,6 +443,12 @@ function killPlayer(player, reason) {
     if (socket) {
         socket.emit('death', { reason: reason });
     }
+
+    // Credita Circoins da sessão que está terminando (não bloqueia a
+    // remoção do jogador — roda em paralelo, é "fire and forget" aqui
+    // porque já vamos deletar o objeto de qualquer forma).
+    creditSessionCircoins(player);
+
     delete players[player.id];
 }
 
@@ -317,15 +458,40 @@ function killPlayer(player, reason) {
 io.on('connection', (socket) => {
     console.log(`[conexão] ${socket.id} conectou`);
 
-    socket.on('join', (data) => {
+    // Resolve o token JWT (se enviado) em userId + lista de skins
+    // possuídas. Jogadores sem token continuam podendo jogar como
+    // "convidados" — só não acumulam Circoins nem usam skins pagas.
+    async function resolvePlayerIdentity(data) {
+        let userId = null;
+        let ownedSkins = [];
+
+        const token = data && data.token;
+        if (token) {
+            const decoded = auth.verifyToken(token);
+            if (decoded) {
+                userId = decoded.userId;
+                try {
+                    ownedSkins = await db.getUserSkins(userId);
+                } catch (err) {
+                    console.error('[resolvePlayerIdentity] erro ao buscar skins:', err);
+                }
+            }
+        }
+
+        return { userId, ownedSkins };
+    }
+
+    socket.on('join', async (data) => {
         const name = data && data.name ? String(data.name) : 'Anônimo';
-        players[socket.id] = createPlayer(socket.id, name);
-        console.log(`[join] ${socket.id} entrou como "${name}"`);
+        const { userId, ownedSkins } = await resolvePlayerIdentity(data);
+        players[socket.id] = createPlayer(socket.id, name, userId, ownedSkins);
+        console.log(`[join] ${socket.id} entrou como "${name}"${userId ? ` (conta #${userId})` : ' (convidado)'}`);
     });
 
-    socket.on('respawn', (data) => {
+    socket.on('respawn', async (data) => {
         const name = data && data.name ? String(data.name) : 'Anônimo';
-        players[socket.id] = createPlayer(socket.id, name);
+        const { userId, ownedSkins } = await resolvePlayerIdentity(data);
+        players[socket.id] = createPlayer(socket.id, name, userId, ownedSkins);
     });
 
     socket.on('input', (data) => {
@@ -360,6 +526,12 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log(`[disconnect] ${socket.id} saiu`);
+        const player = players[socket.id];
+        if (player && !player.isDead) {
+            // Jogador saiu sem morrer (fechou a aba, etc) — ainda credita
+            // os Circoins ganhos até aqui, igual ao que acontece na morte.
+            creditSessionCircoins(player);
+        }
         delete players[socket.id];
     });
 });
@@ -502,6 +674,10 @@ function updatePhysics() {
         const player = players[playerIds[p]];
         if (!player || player.isDead) continue;
 
+        // Skin Elétrica: invulnerabilidade PERMANENTE a vírus, conforme
+        // comprado na loja. Jogadores sem essa skin sofrem o efeito normal.
+        if (hasVirusImmunity(player)) continue;
+
         for (let c = 0; c < player.cells.length; c++) {
             const cell = player.cells[c];
             if (cell.radius < VIRUS_TRIGGER_RADIUS) continue;
@@ -602,7 +778,11 @@ function broadcastState() {
             xp: player.xp,
             xpNeeded: player.level < MAX_LEVEL ? xpNeededForLevel(player.level) : 0,
             pendingLevelUps: player.pendingLevelUps,
-            abilityCounts: player.abilityCounts
+            abilityCounts: player.abilityCounts,
+
+            // Skins (efeito visual no cliente; o efeito de gameplay real
+            // já é decidido no servidor, isso aqui é só pra exibição)
+            ownedSkins: player.ownedSkins
         };
     }
 
@@ -637,7 +817,17 @@ setInterval(broadcastState, BROADCAST_RATE);
 initFoods();
 initViruses();
 
-httpServer.listen(PORT, () => {
-    console.log(`[ball.io server] rodando na porta ${PORT}`);
-    console.log(`[ball.io server] mundo: ${world.width}x${world.height} | comidas: ${MAX_FOODS} | vírus: ${MAX_VIRUSES}`);
-});
+async function startServer() {
+    try {
+        await db.initSchema();
+    } catch (err) {
+        console.error('[db] erro ao inicializar schema (login/Circoins não vão funcionar):', err);
+    }
+
+    httpServer.listen(PORT, () => {
+        console.log(`[ball.io server] rodando na porta ${PORT}`);
+        console.log(`[ball.io server] mundo: ${world.width}x${world.height} | comidas: ${MAX_FOODS} | vírus: ${MAX_VIRUSES}`);
+    });
+}
+
+startServer();

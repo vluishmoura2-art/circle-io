@@ -19,6 +19,13 @@ if (!nameFromUrl || nameFromUrl.trim().length === 0) {
 
 const myName = nameFromUrl.trim().slice(0, 16);
 
+// Se o menu indicou que o jogador fez login (?auth=1), busca o token JWT
+// guardado no localStorage. Sem ?auth=1, o jogador entra como convidado
+// mesmo que por acaso exista um token antigo guardado — assim a aba
+// "Jogar agora" do menu sempre funciona como convidado puro, sem ambiguidade.
+const isAuthenticated = urlParams.get('auth') === '1';
+const authToken = isAuthenticated ? localStorage.getItem('ballio_token') : null;
+
 // ==========================================
 // 1. CONFIGURAÇÕES INICIAIS E CANVAS
 // ==========================================
@@ -88,7 +95,7 @@ socket.on('connect', () => {
     myId = socket.id;
     connectionStatus = 'connected';
     console.log('[socket] conectado:', myId);
-    socket.emit('join', { name: myName });
+    socket.emit('join', { name: myName, token: authToken });
 });
 
 socket.on('state', (state) => {
@@ -104,7 +111,7 @@ socket.on('death', (data) => {
     // Respawna automaticamente depois de 3s, mesma UX que o protótipo local já tinha
     setTimeout(() => {
         isDead = false;
-        socket.emit('respawn', { name: myName });
+        socket.emit('respawn', { name: myName, token: authToken });
     }, 3000);
 });
 
@@ -116,7 +123,7 @@ socket.on('disconnect', () => {
 
 socket.on('reconnect', () => {
     connectionStatus = 'connected';
-    socket.emit('join', { name: myName });
+    socket.emit('join', { name: myName, token: authToken });
 });
 
 socket.on('reconnect_attempt', () => {
@@ -313,6 +320,8 @@ function drawGame() {
 
     // Eu mesmo, por último, pra ficar sempre visível por cima dos outros
     if (me && !me.isDead && myCells.length > 0) {
+        const hasElectricSkin = me.ownedSkins && me.ownedSkins.includes('electric');
+
         for (let i = 0; i < myCells.length; i++) {
             const cell = myCells[i];
             ctx.beginPath();
@@ -320,8 +329,15 @@ function drawGame() {
             ctx.fillStyle = '#00ffcc';
             ctx.fill();
             ctx.closePath();
-            ctx.strokeStyle = cell.mergeTimer > 0 ? '#33fff0' : '#007a66';
-            ctx.lineWidth = 2;
+
+            if (hasElectricSkin) {
+                drawElectricEffect(cell);
+                ctx.strokeStyle = '#fff700';
+                ctx.lineWidth = 3;
+            } else {
+                ctx.strokeStyle = cell.mergeTimer > 0 ? '#33fff0' : '#007a66';
+                ctx.lineWidth = 2;
+            }
             ctx.stroke();
         }
 
@@ -362,6 +378,44 @@ function drawVirusSpikes(virus) {
     ctx.strokeStyle = '#1f8a1f';
     ctx.lineWidth = 2;
     ctx.stroke();
+}
+
+// Skin Elétrica: pequenos raios saindo da borda da célula, em posições e
+// comprimentos pseudo-aleatórios baseados no tempo, pra dar um efeito de
+// "crepitação" elétrica contínua sem precisar de spritesheet/imagem.
+function drawElectricEffect(cell) {
+    const spikeCount = 8;
+    const now = Date.now();
+
+    ctx.save();
+    ctx.strokeStyle = '#fff700';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#fff700';
+    ctx.shadowBlur = 8;
+
+    for (let i = 0; i < spikeCount; i++) {
+        // Cada raio "pisca" em um instante levemente diferente, criando
+        // uma sensação de eletricidade instável em vez de estática.
+        const seed = i * 137.5; // ângulo dourado, distribui os raios de forma irregular
+        const flicker = Math.sin((now / 80) + seed) > 0.3;
+        if (!flicker) continue;
+
+        const angle = (Math.PI * 2 * i) / spikeCount + (now / 600);
+        const startR = cell.radius;
+        const endR = cell.radius + 6 + Math.sin(now / 50 + seed) * 4;
+
+        const startX = cell.x + Math.cos(angle) * startR;
+        const startY = cell.y + Math.sin(angle) * startR;
+        const endX = cell.x + Math.cos(angle) * endR;
+        const endY = cell.y + Math.sin(angle) * endR;
+
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+    }
+
+    ctx.restore();
 }
 
 function drawUI(me) {

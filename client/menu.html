@@ -3,30 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Circle.io</title>
+    <title>ball.io</title>
     <link rel="stylesheet" href="menu.css">
-    <link rel="shortcut icon" href="Custom-Icon-Design-Flatastic-6-Circle.512.png" type="image/x-icon">
 </head>
 <body>
     <div class="menu-container">
         <h1 class="logo">
-            CIRCLE<span class="logo-accent">.io</span>
+            ball<span class="logo-accent">.io</span>
         </h1>
         <p class="tagline">cresça, divida, sobreviva.</p>
 
-        <form id="playForm" class="play-form" autocomplete="off">
+        <!-- Abas: jogar sem conta (rápido) ou entrar com conta (Circoins/skins) -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="guest">Jogar agora</button>
+            <button class="tab-btn" data-tab="login">Entrar</button>
+            <button class="tab-btn" data-tab="register">Criar conta</button>
+        </div>
+
+        <!-- ABA: Convidado — fluxo simples já existente, sem conta -->
+        <form id="guestForm" class="play-form tab-content active" autocomplete="off">
             <input
                 type="text"
-                id="nameInput"
+                id="guestNameInput"
                 class="name-input"
                 placeholder="Seu nome"
                 maxlength="16"
                 required
             >
-            <button type="submit" class="play-button">Jogar</button>
+            <button type="submit" class="play-button">Jogar como convidado</button>
+            <p class="guest-note">Sem conta, você não acumula Circoins nem pode comprar skins.</p>
+        </form>
+
+        <!-- ABA: Login -->
+        <form id="loginForm" class="play-form tab-content" autocomplete="off">
+            <input type="text" id="loginUsername" class="name-input" placeholder="Usuário" maxlength="20" required>
+            <input type="password" id="loginPassword" class="name-input" placeholder="Senha" maxlength="100" required>
+            <button type="submit" class="play-button">Entrar e jogar</button>
+        </form>
+
+        <!-- ABA: Criar conta -->
+        <form id="registerForm" class="play-form tab-content" autocomplete="off">
+            <input type="text" id="registerUsername" class="name-input" placeholder="Escolha um usuário (3-20 caracteres)" maxlength="20" required>
+            <input type="password" id="registerPassword" class="name-input" placeholder="Escolha uma senha (mín. 6 caracteres)" maxlength="100" required>
+            <button type="submit" class="play-button">Criar conta e jogar</button>
         </form>
 
         <p class="error-message" id="errorMessage"></p>
+
+        <a href="shop.html" class="shop-link" id="shopLink" style="display: none;">🛒 Ver loja de skins</a>
 
         <div class="instructions">
             <h2>Como jogar</h2>
@@ -36,16 +60,10 @@
                 <li>Coma comidas e jogadores menores pra crescer</li>
                 <li>Cuidado com os vírus verdes — eles estouram bolinhas grandes</li>
                 <li>Divida antes que o tempo acabe, ou você explode!</li>
+                <li>Com uma conta, ganhe <strong>Circoins</strong> jogando e compre skins na loja</li>
             </ul>
         </div>
     </div>
-    <div class="color-picker-container">
-    <label for="playerColor">Cor do seu Círculo:</label>
-    <div class="picker-row">
-        <input type="color" id="playerColor" value="#00ffcc">
-        <span id="colorHex">#00ffcc</span>
-    </div>
-</div>
 
     <script src="menu.js"></script>
 </body>
