@@ -11,7 +11,7 @@ app.use(express.json()); // Permite que o servidor entenda JSON
 // 2. CONEXÃO COM O SUPABASE (Adicione isso aqui)
 // ==========================================
 const supabaseUrl = 'https://sydvasdxxqezirjtwmdw.supabase.co';
-const supabaseKey = 'COLE_AQUI_A_SUA_CHAVE_ANON'; // Pegue no painel do Supabase
+const supabaseKey = 'sb_publishable_s1-GEvd9wVi60e1Ob4bUog_5UrbpyXM'; // Pegue no painel do Supabase
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
