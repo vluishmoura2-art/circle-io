@@ -3,7 +3,7 @@
 // index.html (o jogo de verdade), passando o nome pela URL.
 
 const playForm = document.getElementById('playForm');
-const nameInput = document.getElementById('nameInput');
+const nameInput = document.getElementByClassName('nameInput');
 const errorMessage = document.getElementById('errorMessage');
 
 // Foca automaticamente no campo de nome ao carregar a página, pra o
