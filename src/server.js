@@ -1,4 +1,59 @@
 // ==========================================
+// 1. IMPORTAÇÕES E CONFIGURAÇÕES (No início)
+// ==========================================
+const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const app = express();
+
+app.use(express.json()); // Permite que o servidor entenda JSON
+
+// ==========================================
+// 2. CONEXÃO COM O SUPABASE (Adicione isso aqui)
+// ==========================================
+const supabaseUrl = 'https://sydvasdxxqezirjtwmdw.supabase.co';
+const supabaseKey = 'COLE_AQUI_A_SUA_CHAVE_ANON'; // Pegue no painel do Supabase
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// ==========================================
+// 3. SUAS ROTAS / ENDPOINTS
+// ==========================================
+
+// Exemplo de rota para buscar dados
+app.get('/api/dados', async (req, res) => {
+  // Substitua 'sua_tabela' pelo nome real da tabela que você criou no painel
+  const { data, error } = await supabase.from('sua_tabela').select('*');
+  
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  
+  return res.json(data);
+});
+
+// Exemplo de rota para salvar dados
+app.post('/api/salvar', async (req, res) => {
+  const { nome, pontuacao } = req.body;
+
+  const { data, error } = await supabase
+    .from('jogadores') 
+    .insert([{ nome: nome, score: pontuacao }]);
+
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  return res.json({ mensagem: 'Salvo com sucesso!', data });
+});
+
+// ==========================================
+// 4. INICIALIZAÇÃO DO SERVIDOR (No final do arquivo)
+// ==========================================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});
+// ==========================================
 // SERVER.JS — ball.io BACK-END (v31+)
 // ==========================================
 // Este arquivo vive em server/src/server.js.
@@ -831,3 +886,4 @@ async function startServer() {
 }
 
 startServer();
+
