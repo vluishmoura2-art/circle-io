@@ -40,8 +40,6 @@ const io = new Server(httpServer, {
     }
 });
 
-const PORT = process.env.PORT || 3000;
-
 // v21: a porta de entrada do jogo é o MENU, não o jogo direto.
 // Por isso a rota raiz ('/') serve explicitamente o menu.html, mesmo
 // existindo um index.html (o jogo em si) dentro da mesma pasta.
