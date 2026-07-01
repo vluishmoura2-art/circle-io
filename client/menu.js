@@ -1,75 +1,166 @@
 // menu.js — lógica da tela inicial do ball.io
-// Responsabilidade única: validar o nome digitado e levar o jogador pro
-// index.html (o jogo de verdade), passando o nome pela URL.
+// Suporta 3 fluxos: jogar como convidado, fazer login, ou criar conta.
+// Login/registro chamam a API REST do servidor e guardam o token JWT no
+// localStorage do navegador — isso é armazenamento normal de aplicação
+// web (não confundir com o storage de artifacts, que é outra coisa).
 
-const playForm = document.getElementById('playForm');
-const nameInput = document.getElementByClassName('nameInput');
 const errorMessage = document.getElementById('errorMessage');
 
-// Foca automaticamente no campo de nome ao carregar a página, pra o
-// jogador já poder digitar sem precisar clicar primeiro
-nameInput.focus();
+// ==========================================
+// SISTEMA DE ABAS
+// ==========================================
+const tabButtons = document.querySelectorAll('.tab-btn');
+const tabContents = {
+    guest: document.getElementById('guestForm'),
+    login: document.getElementById('loginForm'),
+    register: document.getElementById('registerForm')
+};
 
-playForm.addEventListener('submit', (event) => {
+tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-tab');
+        switchTab(tab);
+    });
+});
+
+function switchTab(tab) {
+    tabButtons.forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
+    });
+    Object.keys(tabContents).forEach((key) => {
+        tabContents[key].classList.toggle('active', key === tab);
+    });
+    clearError();
+
+    // Foca automaticamente no primeiro campo da aba ativa
+    const firstInput = tabContents[tab].querySelector('input');
+    if (firstInput) firstInput.focus();
+}
+
+function showError(message) {
+    errorMessage.textContent = message;
+}
+
+function clearError() {
+    errorMessage.textContent = '';
+}
+
+// Foca no campo de nome da aba inicial (convidado) ao carregar
+document.getElementById('guestNameInput').focus();
+
+// Mostra o link da loja se o jogador já tiver feito login antes (token
+// salvo no localStorage de uma sessão anterior).
+const shopLink = document.getElementById('shopLink');
+if (localStorage.getItem('ballio_token')) {
+    shopLink.style.display = 'block';
+}
+
+// ==========================================
+// ABA: CONVIDADO (fluxo original, sem conta)
+// ==========================================
+document.getElementById('guestForm').addEventListener('submit', (event) => {
     event.preventDefault();
+    clearError();
 
+    const nameInput = document.getElementById('guestNameInput');
     const rawName = nameInput.value.trim();
 
-    // Validação no cliente (o servidor também valida/corta o nome por
-    // segurança, mas aqui damos feedback imediato pro jogador)
     if (rawName.length === 0) {
         showError('Digite um nome pra jogar.');
         return;
     }
-
     if (rawName.length > 16) {
         showError('Nome muito longo (máximo 16 caracteres).');
         return;
     }
 
-    // Leva o nome pro jogo via parâmetro de URL. encodeURIComponent evita
-    // que caracteres especiais (espaços, acentos, &, etc.) quebrem a URL.
-    const encodedName = encodeURIComponent(rawName);
-    window.location.href = `index.html?name=${encodedName}`;
+    // Convidado não tem token — index.html trata isso normalmente, o
+    // jogador só não acumula Circoins nem usa skins pagas.
+    goToGame(rawName, null);
 });
 
-function showError(message) {
-    errorMessage.textContent = message;
-    nameInput.focus();
+// ==========================================
+// ABA: LOGIN
+// ==========================================
+document.getElementById('loginForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearError();
+
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+
+    if (!username || !password) {
+        showError('Preencha usuário e senha.');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            showError(data.error || 'Não foi possível entrar.');
+            return;
+        }
+
+        localStorage.setItem('ballio_token', data.token);
+        localStorage.setItem('ballio_username', data.user.username);
+        goToGame(data.user.username, data.token);
+    } catch (err) {
+        showError('Erro de conexão. Tente novamente.');
+    }
+});
+
+// ==========================================
+// ABA: CRIAR CONTA
+// ==========================================
+document.getElementById('registerForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearError();
+
+    const username = document.getElementById('registerUsername').value.trim();
+    const password = document.getElementById('registerPassword').value;
+
+    if (!username || !password) {
+        showError('Preencha usuário e senha.');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            showError(data.error || 'Não foi possível criar a conta.');
+            return;
+        }
+
+        localStorage.setItem('ballio_token', data.token);
+        localStorage.setItem('ballio_username', data.user.username);
+        goToGame(data.user.username, data.token);
+    } catch (err) {
+        showError('Erro de conexão. Tente novamente.');
+    }
+});
+
+// ==========================================
+// NAVEGAÇÃO PRO JOGO
+// ==========================================
+function goToGame(name, token) {
+    const encodedName = encodeURIComponent(name);
+    let url = `index.html?name=${encodedName}`;
+    if (token) {
+        // O token não vai na URL por segurança (URLs podem ficar salvas em
+        // histórico/logs) — o client.js lê ele do localStorage diretamente.
+        url += '&auth=1';
+    }
+    window.location.href = url;
 }
-// ===================================================
-// LÓGICA DO SELETOR DE CORES (INTEGRAÇÃO COM O CLIENT)
-// ===================================================
-document.addEventListener("DOMContentLoaded", () => {
-    const colorInput = document.getElementById("playerColor");
-    const colorHex = document.getElementById("colorHex");
-    
-    if (colorInput && colorHex) {
-        // Atualiza a exibição do texto Hex e a cor dele dinamicamente
-        colorInput.addEventListener("input", (e) => {
-            const selectedColor = e.target.value;
-            colorHex.innerText = selectedColor.toUpperCase();
-            colorHex.style.color = selectedColor;
-        });
-    }
-
-    // Intercepta o envio do formulário ou clique do botão para injetar a cor na URL
-    const menuForm = document.querySelector("form") || document.getElementById("menuForm");
-    
-    if (menuForm) {
-        menuForm.addEventListener("submit", (e) => {
-            // Se o formulário original muda a página via action nativa, 
-            // precisamos anexar o parâmetro de cor antes de ir para o index.html
-            e.preventDefault();
-            
-            const nameInput = document.querySelector('input[name="name"]') || document.getElementById("nameInput");
-            const name = nameInput ? nameInput.value.trim() : "";
-            const color = colorInput ? encodeURIComponent(colorInput.value) : "%2300ffcc";
-
-            if (name.length > 0) {
-                // Redireciona levando tanto o Nome quanto a Cor escolhida
-                window.location.href = `index.html?name=${encodeURIComponent(name)}&color=${color}`;
-            }
-        });
-    }
-});
