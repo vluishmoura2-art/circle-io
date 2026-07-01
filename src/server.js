@@ -3,9 +3,6 @@
 // 4. INICIALIZAÇÃO DO SERVIDOR (No final do arquivo)
 // ==========================================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
 // ==========================================
 // SERVER.JS — ball.io BACK-END (v31+)
 // ==========================================
